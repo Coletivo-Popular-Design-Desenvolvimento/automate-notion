@@ -6,4 +6,4 @@ Construção e publicação de aplicações que facilitam a utilização do Noti
 
 Projeto para migrar / separar  as bases de dados do notion do coletivo
 
-[Veja mais detalhes em ](./migracao-bases/README.md)
+[Veja mais detalhes ](./migracao-bases/README.md)
