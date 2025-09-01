@@ -54,6 +54,18 @@ class NotionMigrator {
         return properties
     }
 
+    async addTargetLegacyId(databaseID) {
+        const response = await notion.databases.update({
+            database_id:databaseID,
+            properties:{
+                "IdGeral": {
+                    "number":{}
+                }
+            }
+        });
+        console.log(`✅ Propriedade Id Geral criada`);
+    }
+
     // Converte as propriedades de uma página para o formato correto
     mapProperties(sourcePage, targetSchema) {
         const mappedProperties = {}
@@ -62,9 +74,14 @@ class NotionMigrator {
             const targetProp = targetSchema[propName]
             const sourceProp = sourcePage.properties[propName]
 
-            if (!sourceProp) {
+            if (!sourceProp && propName != "IdGeral") {
                 console.log(`⚠️  Propriedade "${propName}" não encontrada na página origem`)
                 return
+            } else if(propName === "IdGeral"){
+                mappedProperties[propName] = {
+                   number:sourcePage.properties.ID.unique_id.number 
+                }
+                return;
             }
 
             // Mapeia diferentes tipos de propriedade
@@ -155,6 +172,9 @@ class NotionMigrator {
                     }
                     break
 
+                case 'unique_id':
+                    console.log("Ignorando unique_id (Já mapeado)");
+                    break;
                 default:
                     console.log(`⚠️  Tipo de propriedade não suportado: ${targetProp.type} (${propName})`)
             }
@@ -194,7 +214,12 @@ class NotionMigrator {
             const sourceData = await this.getSourceData(sourceDbId)
 
             // 2. Buscar schema do destino
-            const targetSchema = await this.getTargetSchema(targetDbId)
+            let targetSchema = await this.getTargetSchema(targetDbId)
+
+            if(!dryRun && !targetSchema.IdGeral) {
+                const result = await this.addTargetLegacyId(targetDbId);
+                targetSchema = await this.getTargetSchema(targetDbId)
+            }
 
             // 3. Migrar dados
             console.log('📤 Iniciando transferência de dados...')
