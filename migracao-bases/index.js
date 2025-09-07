@@ -12,7 +12,7 @@ class NotionMigrator {
     }
 
     // Busca todas as páginas do database de origem
-    async getSourceData(databaseId) {
+    async getSourceData(databaseId, filters=[]) {
         console.log(`📥 Buscando dados do database origem: ${databaseId}`)
         
         let allResults = []
@@ -20,14 +20,20 @@ class NotionMigrator {
         let nextCursor = undefined
 
         while (hasMore) {
-            const response = await notion.databases.query({
+            const query = {
                 database_id: databaseId,
                 start_cursor: nextCursor,
                 page_size: 100, 
-                // filter: {
-                //     //FILTROS AQUI - https://developers.notion.com/reference/post-database-query-filter
-                // }
-            })
+                filter: filters && filters.length > 0 ?  {
+                    and: filters.map(item => ({
+                        property: item.propertyName,
+                        rich_text: {
+                            contains: item.propertyValue
+                        }
+                    }))
+                } : undefined
+            };
+            const response = await notion.databases.query(query);
 
             allResults = [...allResults, ...response.results]
             hasMore = response.has_more
@@ -66,6 +72,166 @@ class NotionMigrator {
         console.log(`✅ Propriedade Id Geral criada`);
     }
 
+    async cloneDatabase(sourceDatabaseId, targetPageId, newDatabaseTitle, simulate=true) {
+        try {
+            console.log('🔍 Obtendo informações da base de dados de origem...');
+            
+            // 1. Obter a estrutura da base de dados de origem
+            const sourceDatabase = await notion.databases.retrieve({
+                database_id: sourceDatabaseId
+            });
+
+            console.log(`✅ Base de dados encontrada: ${sourceDatabase.title[0]?.plain_text || 'Sem título'}`);
+            console.log(`📊 Propriedades encontradas: ${Object.keys(sourceDatabase.properties).length}`);
+
+            // 2. Extrair as propriedades da base de dados de origem
+            const properties = {};
+            
+            for (const [propertyName, propertyConfig] of Object.entries(sourceDatabase.properties)) {
+                // Criar uma cópia limpa da configuração da propriedade
+                const cleanProperty = {
+                    type: propertyConfig.type
+                };
+
+                // Copiar configurações específicas de cada tipo de propriedade
+                switch (propertyConfig.type) {
+                    case 'title':
+                        cleanProperty.title = {};
+                        break;
+                    case 'rich_text':
+                        cleanProperty.rich_text = {};
+                        break;
+                    case 'number':
+                        cleanProperty.number = propertyConfig.number || {};
+                        break;
+                    case 'select':
+                        cleanProperty.select = {
+                            options: propertyConfig.select.options || []
+                        };
+                        break;
+                    case 'multi_select':
+                        cleanProperty.multi_select = {
+                            options: propertyConfig.multi_select.options || []
+                        };
+                        break;
+                    case 'date':
+                        cleanProperty.date = {};
+                        break;
+                    case 'people':
+                        cleanProperty.people = {};
+                        break;
+                    case 'files':
+                        cleanProperty.files = {};
+                        break;
+                    case 'checkbox':
+                        cleanProperty.checkbox = {};
+                        break;
+                    case 'url':
+                        cleanProperty.url = {};
+                        break;
+                    case 'email':
+                        cleanProperty.email = {};
+                        break;
+                    case 'phone_number':
+                        cleanProperty.phone_number = {};
+                        break;
+                    case 'formula':
+                        cleanProperty.formula = propertyConfig.formula || {};
+                        break;
+                    case 'relation':
+                        cleanProperty.relation = {
+                            database_id: propertyConfig.relation.database_id,
+                            type: propertyConfig.relation.type || 'single_property'
+                        };
+                        break;
+                    case 'rollup':
+                        cleanProperty.rollup = propertyConfig.rollup || {};
+                        break;
+                    case 'created_time':
+                        cleanProperty.created_time = {};
+                        break;
+                    case 'created_by':
+                        cleanProperty.created_by = {};
+                        break;
+                    case 'last_edited_time':
+                        cleanProperty.last_edited_time = {};
+                        break;
+                    case 'last_edited_by':
+                        cleanProperty.last_edited_by = {};
+                        break;
+                    case 'status':
+                        cleanProperty.status = {
+                            options: propertyConfig.status.options || [],
+                            groups: propertyConfig.status.groups || []
+                        };
+                        break;
+                    case 'unique_id':
+                        {
+                            cleanProperty.unique_id = {
+                                prefix: propertyConfig.unique_id.prefix || null
+                            };
+                            if(propertyName == "ID") {
+                                properties["IdGeral"] = {
+                                    number: {}
+                                }
+                            }
+                        }    
+
+                    break;                    default:
+                        // Para tipos não mapeados, copiar a configuração inteira (exceto o ID)
+                        const { id, ...configWithoutId } = propertyConfig;
+                        cleanProperty[propertyConfig.type] = configWithoutId[propertyConfig.type] || {};
+                }
+
+                properties[propertyName] = cleanProperty;
+                console.log(`  ✓ Propriedade copiada: ${propertyName} (${propertyConfig.type})`);
+            }
+
+            console.log('🚀 Criando nova base de dados...');
+
+            // 3. Criar a nova base de dados com as propriedades copiadas
+            const databaseProps = {
+                    parent: {
+                        type: 'page_id',
+                        page_id: targetPageId
+                    },
+                    title: [
+                        {
+                            type: 'text',
+                            text: {
+                                content: newDatabaseTitle
+                            }
+                        }
+                    ],
+                    properties: properties
+                };
+
+            if(!simulate){
+                const newDatabase = await notion.databases.create(databaseProps);
+                console.log(`✅ Nova base de dados criada com sucesso!`);
+                console.log(`🆔 ID da nova base de dados: ${newDatabase.id}`);
+                console.log(`🔗 URL: ${newDatabase.url}`);
+                return newDatabase;
+            } else {
+                console.log(`✅ Simulañçao de criação de bases realizada com sucesso: Propriedades:`, databaseProps);
+                return {...databaseProps, id:"Simulação"};
+            }
+
+        } catch (error) {
+            console.error('❌ Erro ao clonar base de dados:', error.message);
+            
+            if (error.code === 'object_not_found') {
+                console.error('💡 Verifique se o ID da base de dados ou página está correto e se a integração tem acesso.');
+            } else if (error.code === 'unauthorized') {
+                console.error('💡 Verifique se o token de autenticação está correto e se a integração tem as permissões necessárias.');
+            }
+            
+            throw error;
+        }
+    }
+
+
+
     // Converte as propriedades de uma página para o formato correto
     mapProperties(sourcePage, targetSchema) {
         const mappedProperties = {}
@@ -74,14 +240,11 @@ class NotionMigrator {
             const targetProp = targetSchema[propName]
             const sourceProp = sourcePage.properties[propName]
 
-            if (!sourceProp && propName != "IdGeral") {
-                console.log(`⚠️  Propriedade "${propName}" não encontrada na página origem`)
-                return
-            } else if(propName === "IdGeral"){
+            if(propName === "IdGeral"){
                 mappedProperties[propName] = {
                    number:sourcePage.properties.ID.unique_id.number 
                 }
-                return;
+                return mappedProperties;
             }
 
             // Mapeia diferentes tipos de propriedade
@@ -200,27 +363,25 @@ class NotionMigrator {
     }
 
     // Executa a migração completa
-    async migrate(sourceDbId, targetDbId, options = {}) {
+    async migrate(sourceDbId, targetPageId, targetDBName, options = {}) {
         const { dryRun = false, batchSize = 10 } = options
 
         console.log('🚀 Iniciando migração...')
         console.log(`   Database origem: ${sourceDbId}`)
-        console.log(`   Database destino: ${targetDbId}`)
+        console.log(`   Database destino: ${this.targetDBName}`)
         console.log(`   Modo dry-run: ${dryRun ? 'SIM' : 'NÃO'}`)
         console.log('─'.repeat(50))
 
+        
         try {
+
             // 1. Buscar dados da origem
-            const sourceData = await this.getSourceData(sourceDbId)
+            const sourceData = await this.getSourceData(sourceDbId, options.filters)
 
-            // 2. Buscar schema do destino
-            let targetSchema = await this.getTargetSchema(targetDbId)
-
-            if(!dryRun && !targetSchema.IdGeral) {
-                const result = await this.addTargetLegacyId(targetDbId);
-                targetSchema = await this.getTargetSchema(targetDbId)
-            }
-
+            const targetSchema = await this.cloneDatabase(sourceDbId, targetPageId, targetDBName, options.dryRun);
+            
+            const targetDbId = targetSchema.id;
+            
             // 3. Migrar dados
             console.log('📤 Iniciando transferência de dados...')
             
@@ -234,7 +395,7 @@ class NotionMigrator {
 
                 for (const page of batch) {
                     try {
-                        const mappedProperties = this.mapProperties(page, targetSchema)
+                        const mappedProperties = this.mapProperties(page, targetSchema.properties)
                         
                         if (dryRun) {
                             console.log(`   [DRY-RUN] Simularia criação de página com propriedades:`, Object.keys(mappedProperties))
@@ -268,12 +429,17 @@ class NotionMigrator {
 }
 
 // Exemplo de uso
-async function main(sourceDB, destinationDB, simulate=true) {
+async function main(sourceDB, targetPageId, newDatabaseTitle, simulate=true, filters) {
     const migrator = new NotionMigrator()
+    
     try {
-        await migrator.migrate(sourceDB, destinationDB, { 
-            dryRun: !simulate, 
-            batchSize: 10 
+        await migrator.migrate(sourceDB, targetPageId, newDatabaseTitle, { 
+            dryRun: simulate,
+            filters: filters.map(item=> {return {
+                propertyName: item.split("=")[0], 
+                propertyValue: item.split("=")[1]
+            }}),
+            batchSize: 10
         })
 
     } catch (error) {
@@ -284,10 +450,10 @@ async function main(sourceDB, destinationDB, simulate=true) {
 // Para usar como módulo
 export default NotionMigrator
 
-if(process.argv.length >= 4) {
-    main(process.argv[2], process.argv[3],process.argv[4]==="true")
+if(process.argv.length >= 5) {
+    main(process.argv[2], process.argv[3], process.argv[4], process.argv[5]!=="false", process.argv.slice(6))
 } else {
-    console.log("Utilização: \nnode start source_database_id destination_database_id [true|false(default)]\n - true no final confirmará a execução, false apenas realizará uma simulação");
+    console.log("Utilização: \nnode start source_database_id destination_page_id destination_database_name [true|false(default)]\n - Simulação [true - Default, false - execução]), propertyName=propertyValue... filtros para a pesquisa de dados");
 }
 
 
