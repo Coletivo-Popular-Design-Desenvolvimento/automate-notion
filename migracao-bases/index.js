@@ -11,6 +11,27 @@ class NotionMigrator {
         this.targetDbId = null
     }
 
+    mapFilter(filterType, filterValue) {
+        
+        switch(filterType){
+            case "rollup":
+                return {
+                    "any": {
+                        "rich_text": {
+                            "contains": filterValue
+                        }
+                    }};
+            case "select":
+                return {
+                    "equals": filterValue
+                    };
+            default: 
+                return {
+                "contains": filterValue
+            }
+        }
+    }
+
     // Busca todas as páginas do database de origem
     async getSourceData(databaseId, filters=[]) {
         console.log(`📥 Buscando dados do database origem: ${databaseId}`)
@@ -21,19 +42,23 @@ class NotionMigrator {
 
         while (hasMore) {
             const query = {
-                database_id: databaseId,
+                data_source_id: databaseId,
                 start_cursor: nextCursor,
                 page_size: 100, 
                 filter: filters && filters.length > 0 ?  {
                     and: filters.map(item => ({
                         property: item.propertyName,
-                        rich_text: {
-                            contains: item.propertyValue
-                        }
+                        [item.propertyType] : this.mapFilter(item.propertyType, item.propertyValue)
                     }))
                 } : undefined
             };
-            const response = await notion.databases.query(query);
+
+            // const responseDB = await notion.databases.query({
+            //     database_id: '26cc5f6d-25f8-8195-96bd-cd7417e8da9c',
+            // });
+            // console.log(responseDB.results)
+
+            const response = await notion.dataSources.query(query);
 
             allResults = [...allResults, ...response.results]
             hasMore = response.has_more
@@ -64,12 +89,12 @@ class NotionMigrator {
         const response = await notion.databases.update({
             database_id:databaseID,
             properties:{
-                "IdGeral": {
+                "IdLegado": {
                     "number":{}
                 }
             }
         });
-        console.log(`✅ Propriedade Id Geral criada`);
+        console.log(`✅ Propriedade Id Legado criada`);
     }
 
     async cloneDatabase(sourceDatabaseId, targetPageId, newDatabaseTitle, simulate=true) {
@@ -77,8 +102,8 @@ class NotionMigrator {
             console.log('🔍 Obtendo informações da base de dados de origem...');
             
             // 1. Obter a estrutura da base de dados de origem
-            const sourceDatabase = await notion.databases.retrieve({
-                database_id: sourceDatabaseId
+            const sourceDatabase = await notion.dataSources.retrieve({
+                data_source_id: sourceDatabaseId
             });
 
             console.log(`✅ Base de dados encontrada: ${sourceDatabase.title[0]?.plain_text || 'Sem título'}`);
@@ -139,10 +164,7 @@ class NotionMigrator {
                         cleanProperty.formula = propertyConfig.formula || {};
                         break;
                     case 'relation':
-                        cleanProperty.relation = {
-                            database_id: propertyConfig.relation.database_id,
-                            type: propertyConfig.relation.type || 'single_property'
-                        };
+                        cleanProperty.relation = propertyConfig.relation;
                         break;
                     case 'rollup':
                         cleanProperty.rollup = propertyConfig.rollup || {};
@@ -162,7 +184,7 @@ class NotionMigrator {
                     case 'status':
                         cleanProperty.status = {
                             options: propertyConfig.status.options || [],
-                            groups: propertyConfig.status.groups || []
+                            groups: []//propertyConfig.status.groups || []
                         };
                         break;
                     case 'unique_id':
@@ -203,7 +225,9 @@ class NotionMigrator {
                             }
                         }
                     ],
-                    properties: properties
+                    initial_data_source: {
+                        properties: {...properties}
+                    }
                 };
 
             if(!simulate){
@@ -240,7 +264,7 @@ class NotionMigrator {
             const targetProp = targetSchema[propName]
             const sourceProp = sourcePage.properties[propName]
 
-            if(propName === "IdGeral"){
+            if(propName === "IdLegado"){
                 mappedProperties[propName] = {
                    number:sourcePage.properties.ID.unique_id.number 
                 }
@@ -335,6 +359,15 @@ class NotionMigrator {
                     }
                     break
 
+                case 'people':
+                    if (sourceProp.people) {
+                        mappedProperties[propName] = {
+                            id: sourceProp.people.id,
+                            name: sourceProp.people.name
+                            
+                        }
+                    }
+                    break
                 case 'unique_id':
                     console.log("Ignorando unique_id (Já mapeado)");
                     break;
@@ -375,8 +408,27 @@ class NotionMigrator {
         
         try {
 
+            const project = await this.getSourceData("e4919bf1-3b4b-4c11-ab60-1066b8446c37",[{
+                propertyName:"Nome",
+                propertyType:"rich_text",
+                propertyValue: options.filters[0]
+            }])
+
+            
+            const filters = [{
+                propertyName:"Projeto",
+                propertyType:"relation",
+                propertyValue: project[0].id
+            }, 
+            {
+                propertyName:"Tipo da Tarefa",
+                propertyType:"select",
+                propertyValue: options.filters[1]
+            }        
+            ];
+
             // 1. Buscar dados da origem
-            const sourceData = await this.getSourceData(sourceDbId, options.filters)
+            const sourceData = await this.getSourceData(sourceDbId, filters)
 
             const targetSchema = await this.cloneDatabase(sourceDbId, targetPageId, targetDBName, options.dryRun);
             
@@ -408,7 +460,7 @@ class NotionMigrator {
                         await new Promise(resolve => setTimeout(resolve, 100))
 
                     } catch (error) {
-                        console.error(`❌ Erro ao migrar página ${page.id}:`, error.message)
+                        console.error(`❌ Erro ao migrpropertyTypear página ${page.id}:`, error.message)
                         errorCount++
                     }
                 }
@@ -435,10 +487,7 @@ async function main(sourceDB, targetPageId, newDatabaseTitle, simulate=true, fil
     try {
         await migrator.migrate(sourceDB, targetPageId, newDatabaseTitle, { 
             dryRun: simulate,
-            filters: filters.map(item=> {return {
-                propertyName: item.split("=")[0], 
-                propertyValue: item.split("=")[1]
-            }}),
+            filters: filters,
             batchSize: 10
         })
 

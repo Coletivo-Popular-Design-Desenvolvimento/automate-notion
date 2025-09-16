@@ -11,7 +11,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@notionhq/client": "^4.0.2",
+    "@notionhq/client": "^5.1.0",
     "dotenv": "^17.2.1"
   }
 }
