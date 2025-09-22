@@ -182,9 +182,15 @@ class NotionMigrator {
                         cleanProperty.last_edited_by = {};
                         break;
                     case 'status':
-                        cleanProperty.status = {
-                            options: propertyConfig.status.options || [],
-                            groups: []//propertyConfig.status.groups || []
+                        cleanProperty.type = "select";
+                        cleanProperty.name = propertyConfig.name,
+                        cleanProperty.select = {
+                            options: propertyConfig?.status?.options?.map(item=> {
+                                return {
+                                    name: item.name,
+                                    color: item.color
+                                };
+                            }) || []
                         };
                         break;
                     case 'unique_id':
@@ -235,7 +241,7 @@ class NotionMigrator {
                 console.log(`✅ Nova base de dados criada com sucesso!`);
                 console.log(`🆔 ID da nova base de dados: ${newDatabase.id}`);
                 console.log(`🔗 URL: ${newDatabase.url}`);
-                return newDatabase;
+                return {...newDatabase, data_sources: [{...newDatabase.data_sources[0], properties: properties}]};
             } else {
                 console.log(`✅ Simulañçao de criação de bases realizada com sucesso: Propriedades:`, databaseProps);
                 return {...databaseProps, id:"Simulação"};
@@ -302,6 +308,13 @@ class NotionMigrator {
                         mappedProperties[propName] = {
                             select: sourceProp.select
                         }
+                    } else if(sourceProp.status) {
+                        mappedProperties[propName] = {
+                            select: {
+                                color: sourceProp.status.color,
+                                name: sourceProp.status.name
+                            }
+                        }
                     }
                     break
 
@@ -352,7 +365,7 @@ class NotionMigrator {
                     break
 
                 case 'relation':
-                    if (sourceProp.relation) {
+                    if (sourceProp.relation && sourceProp.relation.length > 0) {
                         mappedProperties[propName] = {
                             relation: sourceProp.relation
                         }
@@ -360,12 +373,11 @@ class NotionMigrator {
                     break
 
                 case 'people':
-                    if (sourceProp.people) {
-                        mappedProperties[propName] = {
-                            id: sourceProp.people.id,
-                            name: sourceProp.people.name
-                            
-                        }
+                    if (sourceProp.people && sourceProp.people.length > 0) {
+                        mappedProperties[propName] = sourceProp.people.map(item=> { return {
+                                id: sourceProp.people.id,
+                                name: sourceProp.people.name
+                        }});
                     }
                     break
                 case 'unique_id':
@@ -381,13 +393,14 @@ class NotionMigrator {
 
     // Cria uma nova página no database de destino
     async createPage(targetDbId, properties) {
+        const req = {
+            parent: {
+                data_source_id: targetDbId
+            },
+            properties: properties
+        };        
         try {
-            const response = await notion.pages.create({
-                parent: {
-                    database_id: targetDbId
-                },
-                properties: properties
-            })
+            const response = await notion.pages.create(req);
             return response
         } catch (error) {
             console.error('❌ Erro ao criar página:', error.message)
@@ -432,8 +445,8 @@ class NotionMigrator {
 
             const targetSchema = await this.cloneDatabase(sourceDbId, targetPageId, targetDBName, options.dryRun);
             
-            const targetDbId = targetSchema.id;
-            
+            const targetDbId = targetSchema.data_sources[0].id;
+
             // 3. Migrar dados
             console.log('📤 Iniciando transferência de dados...')
             
@@ -447,7 +460,8 @@ class NotionMigrator {
 
                 for (const page of batch) {
                     try {
-                        const mappedProperties = this.mapProperties(page, targetSchema.properties)
+
+                        const mappedProperties = this.mapProperties(page, targetSchema.data_sources[0].properties)
                         
                         if (dryRun) {
                             console.log(`   [DRY-RUN] Simularia criação de página com propriedades:`, Object.keys(mappedProperties))
