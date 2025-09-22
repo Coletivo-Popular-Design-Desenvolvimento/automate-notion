@@ -111,6 +111,9 @@ class NotionMigrator {
 
             // 2. Extrair as propriedades da base de dados de origem
             const properties = {};
+
+            
+            //targetSchema[propName].select.options.find(item=>item.name === sourceProp.status.name)
             
             for (const [propertyName, propertyConfig] of Object.entries(sourceDatabase.properties)) {
                 // Criar uma cópia limpa da configuração da propriedade
@@ -187,6 +190,7 @@ class NotionMigrator {
                         cleanProperty.select = {
                             options: propertyConfig?.status?.options?.map(item=> {
                                 return {
+                                    id: item.id,
                                     name: item.name,
                                     color: item.color
                                 };
@@ -306,22 +310,26 @@ class NotionMigrator {
                 case 'select':
                     if (sourceProp.select) {
                         mappedProperties[propName] = {
-                            select: sourceProp.select
-                        }
+                            select: {
+                                name: sourceProp.select.name
+                            }
+                        };
                     } else if(sourceProp.status) {
                         mappedProperties[propName] = {
                             select: {
-                                color: sourceProp.status.color,
                                 name: sourceProp.status.name
                             }
-                        }
+                        };
                     }
                     break
 
                 case 'multi_select':
                     if (sourceProp.multi_select) {
                         mappedProperties[propName] = {
-                            multi_select: sourceProp.multi_select
+                            multi_select: sourceProp.multi_select.map(item=> {
+                                    const {id, ...multi_select} = item
+                                    return multi_select;
+                            })
                         }
                     }
                     break
@@ -374,10 +382,11 @@ class NotionMigrator {
 
                 case 'people':
                     if (sourceProp.people && sourceProp.people.length > 0) {
-                        mappedProperties[propName] = sourceProp.people.map(item=> { return {
-                                id: sourceProp.people.id,
-                                name: sourceProp.people.name
-                        }});
+                        mappedProperties[propName] = {
+                            people: sourceProp.people.map(item=> { return {
+                                id: item.id
+                            }})
+                        }
                     }
                     break
                 case 'unique_id':
@@ -459,7 +468,7 @@ class NotionMigrator {
                 console.log(`   Processando lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(sourceData.length/batchSize)}...`)
 
                 for (const page of batch) {
-                    try {
+                    // try {
 
                         const mappedProperties = this.mapProperties(page, targetSchema.data_sources[0].properties)
                         
@@ -473,10 +482,10 @@ class NotionMigrator {
                         // Delay para evitar rate limiting
                         await new Promise(resolve => setTimeout(resolve, 100))
 
-                    } catch (error) {
-                        console.error(`❌ Erro ao migrpropertyTypear página ${page.id}:`, error.message)
-                        errorCount++
-                    }
+                    // } catch (error) {
+                    //     console.error(`❌ Erro ao migrar página ${page.id}:`, error.message)
+                    //     errorCount++
+                    // }
                 }
             }
 
