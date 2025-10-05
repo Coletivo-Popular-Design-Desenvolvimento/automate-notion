@@ -97,128 +97,12 @@ class NotionMigrator {
         console.log(`✅ Propriedade Id Legado criada`);
     }
 
-    async cloneDatabase(sourceDatabaseId, targetPageId, newDatabaseTitle, simulate=true) {
+    async cloneDatabase(sourceDatabase, targetPageId, newDatabaseTitle, simulate=true) {
         try {
             console.log('🔍 Obtendo informações da base de dados de origem...');
-            
-            // 1. Obter a estrutura da base de dados de origem
-            const sourceDatabase = await notion.dataSources.retrieve({
-                data_source_id: sourceDatabaseId
-            });
 
             console.log(`✅ Base de dados encontrada: ${sourceDatabase.title[0]?.plain_text || 'Sem título'}`);
             console.log(`📊 Propriedades encontradas: ${Object.keys(sourceDatabase.properties).length}`);
-
-            // 2. Extrair as propriedades da base de dados de origem
-            const properties = {};
-
-            
-            //targetSchema[propName].select.options.find(item=>item.name === sourceProp.status.name)
-            
-            for (const [propertyName, propertyConfig] of Object.entries(sourceDatabase.properties)) {
-                // Criar uma cópia limpa da configuração da propriedade
-                const cleanProperty = {
-                    type: propertyConfig.type
-                };
-
-                // Copiar configurações específicas de cada tipo de propriedade
-                switch (propertyConfig.type) {
-                    case 'title':
-                        cleanProperty.title = {};
-                        break;
-                    case 'rich_text':
-                        cleanProperty.rich_text = {};
-                        break;
-                    case 'number':
-                        cleanProperty.number = propertyConfig.number || {};
-                        break;
-                    case 'select':
-                        cleanProperty.select = {
-                            options: propertyConfig.select.options || []
-                        };
-                        break;
-                    case 'multi_select':
-                        cleanProperty.multi_select = {
-                            options: propertyConfig.multi_select.options || []
-                        };
-                        break;
-                    case 'date':
-                        cleanProperty.date = {};
-                        break;
-                    case 'people':
-                        cleanProperty.people = {};
-                        break;
-                    case 'files':
-                        cleanProperty.files = {};
-                        break;
-                    case 'checkbox':
-                        cleanProperty.checkbox = {};
-                        break;
-                    case 'url':
-                        cleanProperty.url = {};
-                        break;
-                    case 'email':
-                        cleanProperty.email = {};
-                        break;
-                    case 'phone_number':
-                        cleanProperty.phone_number = {};
-                        break;
-                    case 'formula':
-                        cleanProperty.formula = propertyConfig.formula || {};
-                        break;
-                    case 'relation':
-                        cleanProperty.relation = propertyConfig.relation;
-                        break;
-                    case 'rollup':
-                        cleanProperty.rollup = propertyConfig.rollup || {};
-                        break;
-                    case 'created_time':
-                        cleanProperty.created_time = {};
-                        break;
-                    case 'created_by':
-                        cleanProperty.created_by = {};
-                        break;
-                    case 'last_edited_time':
-                        cleanProperty.last_edited_time = {};
-                        break;
-                    case 'last_edited_by':
-                        cleanProperty.last_edited_by = {};
-                        break;
-                    case 'status':
-                        cleanProperty.type = "select";
-                        cleanProperty.name = propertyConfig.name,
-                        cleanProperty.select = {
-                            options: propertyConfig?.status?.options?.map(item=> {
-                                return {
-                                    id: item.id,
-                                    name: item.name,
-                                    color: item.color
-                                };
-                            }) || []
-                        };
-                        break;
-                    case 'unique_id':
-                        {
-                            cleanProperty.unique_id = {
-                                prefix: propertyConfig.unique_id.prefix || null
-                            };
-                            if(propertyName == "ID") {
-                                properties["IdGeral"] = {
-                                    number: {}
-                                }
-                            }
-                        }    
-
-                    break;                    default:
-                        // Para tipos não mapeados, copiar a configuração inteira (exceto o ID)
-                        const { id, ...configWithoutId } = propertyConfig;
-                        cleanProperty[propertyConfig.type] = configWithoutId[propertyConfig.type] || {};
-                }
-
-                properties[propertyName] = cleanProperty;
-                console.log(`  ✓ Propriedade copiada: ${propertyName} (${propertyConfig.type})`);
-            }
-
             console.log('🚀 Criando nova base de dados...');
 
             // 3. Criar a nova base de dados com as propriedades copiadas
@@ -234,18 +118,18 @@ class NotionMigrator {
                                 content: newDatabaseTitle
                             }
                         }
-                    ],
-                    initial_data_source: {
-                        properties: {...properties}
-                    }
+                    ]
                 };
 
             if(!simulate){
                 const newDatabase = await notion.databases.create(databaseProps);
+                const newDataSource = await notion.dataSources.retrieve({
+                    data_source_id: newDatabase.data_sources[0].id 
+                })
                 console.log(`✅ Nova base de dados criada com sucesso!`);
                 console.log(`🆔 ID da nova base de dados: ${newDatabase.id}`);
                 console.log(`🔗 URL: ${newDatabase.url}`);
-                return {...newDatabase, data_sources: [{...newDatabase.data_sources[0], properties: properties}]};
+                return {...newDataSource};
             } else {
                 console.log(`✅ Simulañçao de criação de bases realizada com sucesso: Propriedades:`, databaseProps);
                 return {...databaseProps, id:"Simulação"};
@@ -264,141 +148,287 @@ class NotionMigrator {
         }
     }
 
+    async updateSchema(targeDbId, newProperties, simulate=true) {
+        try {
+            console.log('🔍 Adicionando propriedade a base de destino', targeDbId, newProperties);
 
-
-    // Converte as propriedades de uma página para o formato correto
-    mapProperties(sourcePage, targetSchema) {
-        const mappedProperties = {}
-
-        Object.keys(targetSchema).forEach(propName => {
-            const targetProp = targetSchema[propName]
-            const sourceProp = sourcePage.properties[propName]
-
-            if(propName === "IdLegado"){
-                mappedProperties[propName] = {
-                   number:sourcePage.properties.ID.unique_id.number 
+            if(!simulate){
+                const newData = await notion.dataSources.update(
+                {
+                    data_source_id: targeDbId,
+                    properties: { ... newProperties}
                 }
-                return mappedProperties;
+                )
+                return {...newData};
+            } else {
+                return {...newProperties};
             }
 
-            // Mapeia diferentes tipos de propriedade
-            switch (targetProp.type) {
-                case 'title':
-                    if (sourceProp.title) {
-                        mappedProperties[propName] = {
-                            title: sourceProp.title
-                        }
-                    }
-                    break
+        } catch (error) {
+            console.error('❌ Erro ao clonar base de dados:', error.message);
+            
+            if (error.code === 'object_not_found') {
+                console.error('💡 Verifique se o ID da base de dados ou página está correto e se a integração tem acesso.');
+            } else if (error.code === 'unauthorized') {
+                console.error('💡 Verifique se o token de autenticação está correto e se a integração tem as permissões necessárias.');
+            }
+            
+            throw error;
+        }
+    }
 
-                case 'rich_text':
-                    if (sourceProp.rich_text) {
-                        mappedProperties[propName] = {
-                            rich_text: sourceProp.rich_text
-                        }
-                    }
-                    break
+    mapPropertyStructure(propertyConfig, propertyName, targetSchema) {
+        const cleanProperty = {
+            type: propertyConfig.type
+        }
+        let propName = propertyName;
 
-                case 'number':
-                    if (sourceProp.number !== null && sourceProp.number !== undefined) {
-                        mappedProperties[propName] = {
-                            number: sourceProp.number
-                        }
-                    }
-                    break
-
-                case 'select':
-                    if (sourceProp.select) {
-                        mappedProperties[propName] = {
-                            select: {
-                                name: sourceProp.select.name
+        // Copiar configurações específicas de cada tipo de propriedade
+        switch (propertyConfig.type) {
+            case 'title':
+                var objKeys = Object.keys(targetSchema.properties);
+                var titlePropertyName = objKeys.filter(item => targetSchema.properties[item].type=="title");
+                cleanProperty.title = { }
+                cleanProperty.name = propertyName;
+                propName = titlePropertyName;
+                break
+            case 'rich_text':
+                cleanProperty.rich_text = {}
+                break
+            case 'number':
+                cleanProperty.number = propertyConfig.number || {}
+                break
+            case 'select':
+                cleanProperty.select = {
+                    options: propertyConfig.select.options || []
+                }
+                break
+            case 'multi_select':
+                cleanProperty.multi_select = {
+                    options: propertyConfig.multi_select.options || []
+                }
+                break
+            case 'date':
+                cleanProperty.date = {}
+                break
+            case 'people':
+                cleanProperty.people = {}
+                break
+            case 'files':
+                cleanProperty.files = {}
+                break
+            case 'checkbox':
+                cleanProperty.checkbox = {}
+                break
+            case 'url':
+                cleanProperty.url = {}
+                break
+            case 'email':
+                cleanProperty.email = {}
+                break
+            case 'phone_number':
+                cleanProperty.phone_number = {}
+                break
+            case 'formula':
+                cleanProperty.formula = propertyConfig.formula || {}
+                break
+            case 'relation':
+                cleanProperty.relation = propertyConfig.relation
+                break
+            case 'rollup':
+                cleanProperty.rollup = propertyConfig.rollup || {}
+                break
+            case 'created_time':
+                cleanProperty.created_time = {}
+                break
+            case 'created_by':
+                cleanProperty.created_by = {}
+                break
+            case 'last_edited_time':
+                cleanProperty.last_edited_time = {}
+                break
+            case 'last_edited_by':
+                cleanProperty.last_edited_by = {}
+                break
+            case 'status':
+                cleanProperty.type = "select"
+                cleanProperty.name = propertyConfig.name,
+                    cleanProperty.select = {
+                        options: propertyConfig?.status?.options?.map(item => {
+                            return {
+                                id: item.id,
+                                name: item.name,
+                                color: item.color
                             }
-                        };
-                    } else if(sourceProp.status) {
-                        mappedProperties[propName] = {
-                            select: {
-                                name: sourceProp.status.name
-                            }
-                        };
+                        }) || []
                     }
-                    break
-
-                case 'multi_select':
-                    if (sourceProp.multi_select) {
-                        mappedProperties[propName] = {
-                            multi_select: sourceProp.multi_select.map(item=> {
-                                    const {id, ...multi_select} = item
-                                    return multi_select;
-                            })
+                break
+            case 'unique_id':
+                {
+                    cleanProperty.unique_id = {
+                        prefix: propertyConfig.unique_id.prefix || null
+                    }
+                    if (propertyName == "ID") {
+                        cleanProperty["IdLegado"] = {
+                            number: {}
                         }
                     }
-                    break
+                }
+                break; 
+            default:
+                // Para tipos não mapeados, copiar a configuração inteira (exceto o ID)
+                const { id, ...configWithoutId } = propertyConfig
+                cleanProperty[propertyConfig.type] = configWithoutId[propertyConfig.type] || {}
+        }
 
-                case 'date':
-                    if (sourceProp.date) {
-                        mappedProperties[propName] = {
-                            date: sourceProp.date
+        return {property: cleanProperty, name: propName}
+    }
+
+    mapPropertyValue(sourceSchema, sourcePage, propName) {
+        const targetProp = sourceSchema[propName]
+        const sourceProp = sourcePage.properties[propName]
+        let outputValue = null;
+
+        if (propName === "IdLegado") {
+            outputValue = {
+                number: sourcePage.properties.ID.unique_id.number
+            }
+        }
+
+        // Mapeia diferentes tipos de propriedade
+        switch (targetProp.type) {
+            case 'title':
+                if (sourceProp.title) {
+                    outputValue = {
+                        title: sourceProp.title
+                    }
+                }
+                break
+
+            case 'rich_text':
+                if (sourceProp.rich_text) {
+                    outputValue = {
+                        rich_text: sourceProp.rich_text
+                    }
+                }
+                break
+
+            case 'number':
+                if (sourceProp.number !== null && sourceProp.number !== undefined) {
+                    outputValue = {
+                        number: sourceProp.number
+                    }
+                }
+                break
+
+            case 'select':
+                if (sourceProp.select) {
+                    outputValue = {
+                        select: {
+                            name: sourceProp.select.name
                         }
                     }
-                    break
-
-                case 'checkbox':
-                    mappedProperties[propName] = {
-                        checkbox: sourceProp.checkbox || false
-                    }
-                    break
-
-                case 'url':
-                    if (sourceProp.url) {
-                        mappedProperties[propName] = {
-                            url: sourceProp.url
+                } else if (sourceProp.status) {
+                    outputValue = {
+                        select: {
+                            name: sourceProp.status.name
                         }
                     }
-                    break
+                }
+                break
 
-                case 'email':
-                    if (sourceProp.email) {
-                        mappedProperties[propName] = {
-                            email: sourceProp.email
-                        }
+            case 'multi_select':
+                if (sourceProp.multi_select) {
+                    outputValue = {
+                        multi_select: sourceProp.multi_select.map(item => {
+                            const { id, ...multi_select } = item
+                            return multi_select
+                        })
                     }
-                    break
+                }
+                break
 
-                case 'phone_number':
-                    if (sourceProp.phone_number) {
-                        mappedProperties[propName] = {
-                            phone_number: sourceProp.phone_number
-                        }
+            case 'date':
+                if (sourceProp.date) {
+                    outputValue = {
+                        date: sourceProp.date
                     }
-                    break
+                }
+                break
 
-                case 'relation':
-                    if (sourceProp.relation && sourceProp.relation.length > 0) {
-                        mappedProperties[propName] = {
-                            relation: sourceProp.relation
-                        }
+            case 'checkbox':
+                outputValue = {
+                    checkbox: sourceProp.checkbox || false
+                }
+                break
+
+            case 'url':
+                if (sourceProp.url) {
+                    outputValue = {
+                        url: sourceProp.url
                     }
-                    break
+                }
+                break
 
-                case 'people':
-                    if (sourceProp.people && sourceProp.people.length > 0) {
-                        mappedProperties[propName] = {
-                            people: sourceProp.people.map(item=> { return {
+            case 'email':
+                if (sourceProp.email) {
+                    outputValue = {
+                        email: sourceProp.email
+                    }
+                }
+                break
+
+            case 'phone_number':
+                if (sourceProp.phone_number) {
+                    outputValue = {
+                        phone_number: sourceProp.phone_number
+                    }
+                }
+                break
+
+            case 'relation':
+                if (sourceProp.relation && sourceProp.relation.length > 0) {
+                    outputValue = {
+                        relation: sourceProp.relation
+                    }
+                }
+                break
+
+            case 'people':
+                if (sourceProp.people && sourceProp.people.length > 0) {
+                    outputValue = {
+                        people: sourceProp.people.map(item => {
+                            return {
                                 id: item.id
-                            }})
-                        }
+                            }
+                        })
                     }
-                    break
-                case 'unique_id':
-                    console.log("Ignorando unique_id (Já mapeado)");
-                    break;
-                default:
-                    console.log(`⚠️  Tipo de propriedade não suportado: ${targetProp.type} (${propName})`)
+                }
+                break
+            case 'unique_id':
+                console.log("Ignorando unique_id (Já mapeado)")
+                break
+            default:
+                console.log(`⚠️  Tipo de propriedade não suportado: ${targetProp.type} (${propName})`)
+            
+        }
+        return outputValue;
+    }
+
+    // Converte as propriedades de uma página para o formato correto
+    mapPropertyValues(sourcePage, sourceSchema) {
+        const mappedProperties = {}
+
+        Object.keys(sourceSchema).forEach(propName => {
+            const value = this.mapPropertyValue(sourceSchema, sourcePage, propName);
+            if(value){
+                mappedProperties[propName] = value;
             }
         })
 
         return mappedProperties
     }
+
 
     // Cria uma nova página no database de destino
     async createPage(targetDbId, properties) {
@@ -408,13 +438,13 @@ class NotionMigrator {
             },
             properties: properties
         };        
-        try {
+        //try {
             const response = await notion.pages.create(req);
             return response
-        } catch (error) {
-            console.error('❌ Erro ao criar página:', error.message)
-            throw error
-        }
+        // } catch (error) {
+        //     console.error('❌ Erro ao criar página:', error.message)
+        //     throw error
+        // }
     }
 
     // Executa a migração completa
@@ -428,7 +458,7 @@ class NotionMigrator {
         console.log('─'.repeat(50))
 
         
-        try {
+        // try {
 
             const project = await this.getSourceData("e4919bf1-3b4b-4c11-ab60-1066b8446c37",[{
                 propertyName:"Nome",
@@ -437,24 +467,19 @@ class NotionMigrator {
             }])
 
             
-            const filters = [{
-                propertyName:"Projeto",
-                propertyType:"relation",
-                propertyValue: project[0].id
-            }, 
-            {
-                propertyName:"Tipo da Tarefa",
-                propertyType:"select",
-                propertyValue: options.filters[1]
-            }        
-            ];
+            const filters = this.mapDefaultFilters(project, options);
 
             // 1. Buscar dados da origem
             const sourceData = await this.getSourceData(sourceDbId, filters)
 
-            const targetSchema = await this.cloneDatabase(sourceDbId, targetPageId, targetDBName, options.dryRun);
+            // 1. Obter a estrutura da base de dados de origem
+            const sourceDatabase = await notion.dataSources.retrieve({
+                data_source_id: sourceDbId
+            });
+
+            let targetSchema = await this.cloneDatabase(sourceDatabase, targetPageId, targetDBName, options.dryRun);
             
-            const targetDbId = targetSchema.data_sources[0].id;
+            const targetDbId = targetSchema.id;
 
             // 3. Migrar dados
             console.log('📤 Iniciando transferência de dados...')
@@ -470,8 +495,19 @@ class NotionMigrator {
                 for (const page of batch) {
                     // try {
 
-                        const mappedProperties = this.mapProperties(page, targetSchema.data_sources[0].properties)
-                        
+                        const mappedProperties = this.mapPropertyValues(page, page.properties)
+                    
+                        let newProperties = {}
+                        Object.keys(mappedProperties).forEach( propName => {
+                            if(!targetSchema?.properties || !targetSchema?.properties[propName]){
+                                const {property, name} = this.mapPropertyStructure(sourceDatabase.properties[propName], propName, targetSchema);
+                                newProperties[name] = property
+                            }
+                        })
+                        if(newProperties != {}){
+                            targetSchema = await this.updateSchema(targetDbId, newProperties, options.dryRun)
+                        }
+
                         if (dryRun) {
                             console.log(`   [DRY-RUN] Simularia criação de página com propriedades:`, Object.keys(mappedProperties))
                         } else {
@@ -496,10 +532,24 @@ class NotionMigrator {
                 console.log(`   Páginas com erro: ${errorCount}`)
             }
 
-        } catch (error) {
-            console.error('❌ Erro na migração:', error.message)
-            throw error
+        // } catch (error) {
+        //     console.error('❌ Erro na migração:', error.message)
+        //     throw error
+        // }
+    }
+
+    mapDefaultFilters(project, options) {
+        return [{
+            propertyName: "Projeto",
+            propertyType: "relation",
+            propertyValue: project[0].id
+        },
+        {
+            propertyName: "Tipo da Tarefa",
+            propertyType: "select",
+            propertyValue: options.filters[1]
         }
+        ]
     }
 }
 
