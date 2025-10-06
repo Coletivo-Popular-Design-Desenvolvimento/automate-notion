@@ -150,7 +150,6 @@ class NotionMigrator {
 
     async updateSchema(targeDbId, newProperties, simulate=true) {
         try {
-            console.log('🔍 Adicionando propriedade a base de destino', targeDbId, newProperties);
 
             if(!simulate){
                 const newData = await notion.dataSources.update(
@@ -178,13 +177,14 @@ class NotionMigrator {
     }
 
     mapPropertyStructure(propertyConfig, propertyName, targetSchema) {
+
         const cleanProperty = {
-            type: propertyConfig.type
+            type: propertyName == "IdLegado" ? "number" : propertyConfig.type
         }
         let propName = propertyName;
 
         // Copiar configurações específicas de cada tipo de propriedade
-        switch (propertyConfig.type) {
+        switch (cleanProperty.type) {
             case 'title':
                 var objKeys = Object.keys(targetSchema.properties);
                 var titlePropertyName = objKeys.filter(item => targetSchema.properties[item].type=="title");
@@ -196,7 +196,7 @@ class NotionMigrator {
                 cleanProperty.rich_text = {}
                 break
             case 'number':
-                cleanProperty.number = propertyConfig.number || {}
+                cleanProperty.number = propertyConfig?.number || {}
                 break
             case 'select':
                 cleanProperty.select = {
@@ -288,12 +288,7 @@ class NotionMigrator {
         const targetProp = sourceSchema[propName]
         const sourceProp = sourcePage.properties[propName]
         let outputValue = null;
-
-        if (propName === "IdLegado") {
-            outputValue = {
-                number: sourcePage.properties.ID.unique_id.number
-            }
-        }
+        let outputPropertyName = propName;
 
         // Mapeia diferentes tipos de propriedade
         switch (targetProp.type) {
@@ -328,15 +323,25 @@ class NotionMigrator {
                             name: sourceProp.select.name
                         }
                     }
-                } else if (sourceProp.status) {
-                    outputValue = {
-                        select: {
-                            name: sourceProp.status.name
-                        }
-                    }
                 }
                 break
-
+            case 'status':
+                    if(sourceProp.status){
+                        outputValue = {
+                            select: {
+                                name: sourceProp.status.name
+                            }
+                        }                
+                    }
+                break;
+            case 'date': {
+                if(sourceProp.date){
+                    outputValue = {
+                        date: sourceProp.date
+                    }
+                }
+                break;
+            }             
             case 'multi_select':
                 if (sourceProp.multi_select) {
                     outputValue = {
@@ -406,13 +411,16 @@ class NotionMigrator {
                 }
                 break
             case 'unique_id':
-                console.log("Ignorando unique_id (Já mapeado)")
+                outputValue = {
+                    number: sourcePage.properties.ID.unique_id.number
+                }     
+                outputPropertyName = "IdLegado";           
                 break
             default:
                 console.log(`⚠️  Tipo de propriedade não suportado: ${targetProp.type} (${propName})`)
             
         }
-        return outputValue;
+        return {propertyName:outputPropertyName, propertyValue:outputValue};
     }
 
     // Converte as propriedades de uma página para o formato correto
@@ -420,9 +428,9 @@ class NotionMigrator {
         const mappedProperties = {}
 
         Object.keys(sourceSchema).forEach(propName => {
-            const value = this.mapPropertyValue(sourceSchema, sourcePage, propName);
-            if(value){
-                mappedProperties[propName] = value;
+            const {propertyName, propertyValue} = this.mapPropertyValue(sourceSchema, sourcePage, propName);
+            if(propertyValue){
+                mappedProperties[propertyName] = propertyValue;
             }
         })
 
@@ -438,13 +446,13 @@ class NotionMigrator {
             },
             properties: properties
         };        
-        //try {
+        try {
             const response = await notion.pages.create(req);
             return response
-        // } catch (error) {
-        //     console.error('❌ Erro ao criar página:', error.message)
-        //     throw error
-        // }
+        } catch (error) {
+            console.error('❌ Erro ao criar página:', error.message)
+            throw error
+        }
     }
 
     // Executa a migração completa
