@@ -1,4 +1,3 @@
-
 node index.js "261c5f6d-25f8-81ae-bf93-000b8d806467" "267c5f6d25f8808a8b9cd1c6e958247a" "[Tech] API Coleta de Dados" "false" "API Coleta de Dados" "Tech"
 node index.js "261c5f6d-25f8-81ae-bf93-000b8d806467" "267c5f6d25f8808a8b9cd1c6e958247a" "[Gestão] Apoia-se CPDD" "false" "Apoia-se CPDD" "Gestão"
 node index.js "261c5f6d-25f8-81ae-bf93-000b8d806467" "267c5f6d25f8808a8b9cd1c6e958247a" "[Design] Apoia-se CPDD" "false" "Apoia-se CPDD" "Design"

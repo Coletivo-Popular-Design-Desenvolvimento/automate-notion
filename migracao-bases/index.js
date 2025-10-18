@@ -1,5 +1,8 @@
 import { Client } from "@notionhq/client"
 import { config } from "dotenv"
+import fetch from 'node-fetch';
+import fs from 'fs';
+
 
 config()
 
@@ -32,6 +35,125 @@ class NotionMigrator {
         }
     }
 
+    async processAndUploadMedia(url, fileName, contentType) {
+
+        
+        // 1. Criar o objeto de upload de arquivo
+        const createResponse = await notion.fileUploads.create({
+            filename:fileName, 
+            content_type: contentType, 
+            mode:"single_part"
+        });
+
+        const fileUploadId = createResponse.id;
+
+        // 2. Enviar o conteúdo do arquivo
+        // (A implementação exata varia muito dependendo da biblioteca HTTP que você usa,
+        // pois 'notionClient.request' geralmente não lida com 'multipart/form-data' facilmente.)
+        // 1. Download do arquivo
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.error(`Falha ao baixar o arquivo: ${url}`);
+            return null; // Ou jogue um erro, dependendo da sua estratégia de erro
+        }
+        const fileBuffer = await response.arrayBuffer();
+
+        const fileBlob = new Blob([fileBuffer], {type:contentType});
+        const sendResponse = await notion.fileUploads.send({
+            file_upload_id: fileUploadId,
+            file: {
+                data: fileBlob,
+                filename: fileName
+            }
+        });
+
+        // 3. Retornar a estrutura do objeto para anexar o arquivo
+        if (sendResponse.status === 'uploaded') {
+            return {
+                type: 'file_upload',
+                file_upload: {
+                    id: fileUploadId,
+                },
+            };
+        } else {
+            throw new Error(`Upload falhou com status: ${sendResponse.data.status}`);
+        }
+                
+    }
+
+
+    async getNewMediaObject(mediaObject, fallbackFileName = 'arquivo') {
+        if (mediaObject?.type === 'file') {
+            const url = mediaObject.file.url;
+            // Tenta inferir o nome e tipo do arquivo da URL (melhorar isso para produção)
+            const urlParts = url.split('/');
+            const fileNameWithParams = urlParts[urlParts.length - 1].split('?')[0];
+            
+            // **Este contentType e fileName devem ser precisos para o upload funcionar**
+            const contentType = 'image/png'; // Exemplo: Tente adivinhar ou use um default
+            
+            return await this.processAndUploadMedia(url, fileNameWithParams || fallbackFileName, contentType);
+        } 
+        
+        // Se for 'external' ou 'emoji' ou qualquer outro tipo, apenas retorna a estrutura original
+        return mediaObject;
+    }
+
+    async getSourceContent(sourcePage) {
+        
+        const childrenBlocks = await notion.blocks.children.list({
+            block_id:sourcePage.id
+        });
+        const mappedItems = await Promise.all(childrenBlocks.results.map(async item=>this.getChildBlock(item)));
+        return mappedItems;
+    }
+
+    async getChildBlock(child_request){
+        const { id:child_id, object, parent, created_time, last_edited_time, ...child} = child_request;
+        let result = {}
+        let mediaTypes = ["file", "image", "pdf", "video", "audio"]
+
+        if(mediaTypes.indexOf(child.type) >= 0){
+            const file = await this.getNewMediaObject(child[child.type])
+            result = {...result, [child.type]:file}
+        }else if(child.type == "paragraph"){
+            result = {
+                ...child, 
+                paragraph: {
+                    ...child.paragraph, 
+                    rich_text: [
+                        ...(child.paragraph.rich_text??[]).map( richText => {
+                            if (richText.type === 'mention' && richText.mention && richText.mention.type === 'link_preview') {
+                                const url = richText.mention.link_preview.url;
+                                // Converte para o tipo 'text' com a formatação de link
+                                return {
+                                    type: 'text',
+                                    text: {
+                                        content: url,
+                                        link: { url: url }
+                                    },
+                                    annotations: richText.annotations, // Mantém a formatação original
+                                    plain_text: url,
+                                    href: url
+                                };
+                            }
+                            return richText;
+                        })]
+                    }
+                }
+        } else {
+            result = child;
+        }
+        if(child.has_children){
+            const childrenBlocks = await notion.blocks.children.list({
+                block_id:child_id
+            });
+            const mappedItems = await Promise.all(childrenBlocks.results.map(async item=>this.getChildBlock(item)));
+            result = {...result, [child.type]:{...child[child.type], children:[...mappedItems]} };
+        }
+        return result;
+    }
+
     // Busca todas as páginas do database de origem
     async getSourceData(databaseId, filters=[]) {
         console.log(`📥 Buscando dados do database origem: ${databaseId}`)
@@ -52,11 +174,6 @@ class NotionMigrator {
                     }))
                 } : undefined
             };
-
-            // const responseDB = await notion.databases.query({
-            //     database_id: '26cc5f6d-25f8-8195-96bd-cd7417e8da9c',
-            // });
-            // console.log(responseDB.results)
 
             const response = await notion.dataSources.query(query);
 
@@ -437,15 +554,28 @@ class NotionMigrator {
         return mappedProperties
     }
 
-
     // Cria uma nova página no database de destino
-    async createPage(targetDbId, properties) {
-        const req = {
+    async createPage(targetDbId, properties, icon, cover, content, originalContent) {
+
+        let req = {
             parent: {
                 data_source_id: targetDbId
             },
             properties: properties
         };        
+
+        if(icon) {
+            const newIcon = await this.getNewMediaObject(icon, 'page_icon');
+            req = {...req, icon: newIcon }
+        }
+        if(cover) {
+            const newCover = await this.getNewMediaObject(cover, 'page_cover');
+            req = {...req, cover: newCover }
+        }
+        if(content){
+            req = {...req, children: [...content]}
+        }
+
         try {
             const response = await notion.pages.create(req);
             return response
@@ -454,6 +584,7 @@ class NotionMigrator {
             throw error
         }
     }
+
 
     // Executa a migração completa
     async migrate(sourceDbId, targetPageId, targetDBName, options = {}) {
@@ -516,10 +647,13 @@ class NotionMigrator {
                             targetSchema = await this.updateSchema(targetDbId, newProperties, options.dryRun)
                         }
 
+                        const content = await this.getSourceContent(page);
+
+
                         if (dryRun) {
                             console.log(`   [DRY-RUN] Simularia criação de página com propriedades:`, Object.keys(mappedProperties))
                         } else {
-                            await this.createPage(targetDbId, mappedProperties)
+                            await this.createPage(targetDbId, mappedProperties, page.icon, page.cover, content, page);
                             successCount++
                         }
 
@@ -532,13 +666,14 @@ class NotionMigrator {
                     // }
                 }
             }
-
+            
             console.log('─'.repeat(50))
             console.log('✅ Migração concluída!')
             console.log(`   Páginas migradas com sucesso: ${successCount}`)
             if (errorCount > 0) {
                 console.log(`   Páginas com erro: ${errorCount}`)
             }
+
 
         // } catch (error) {
         //     console.error('❌ Erro na migração:', error.message)
