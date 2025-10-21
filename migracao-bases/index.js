@@ -12,6 +12,8 @@ class NotionMigrator {
     constructor() {
         this.sourceDbId = null
         this.targetDbId = null
+        this.pageLookup = {}
+        this.referenceColumns = []
     }
 
     mapFilter(filterType, filterValue) {
@@ -541,7 +543,7 @@ class NotionMigrator {
     }
 
     // Converte as propriedades de uma página para o formato correto
-    mapPropertyValues(sourcePage, sourceSchema) {
+    mapPropertyValues(sourcePage, sourceSchema, sourceId) {
         const mappedProperties = {}
 
         Object.keys(sourceSchema).forEach(propName => {
@@ -554,6 +556,73 @@ class NotionMigrator {
         return mappedProperties
     }
 
+
+    // Cria uma nova página no database de destino
+    async fixRelations(targetDbId, targetDataSource) {
+        console.log(`📥 Buscando dados do database origem: ${targetDbId}`)
+        
+        let allResults = []
+        let hasMore = true
+        let nextCursor = undefined
+
+        while (hasMore) {
+            const query = {
+                data_source_id: targetDbId,
+                start_cursor: nextCursor,
+                page_size: 100, 
+            };
+
+            const response = await notion.dataSources.query(query);
+
+            const fixedRelations = response.results.filter(item=> {
+                const keys = Object.keys(item.properties);
+                return keys.find(key=>this.referenceColumns.indexOf(key) >= 0) != null;
+            }).map(item=> {
+                let prop = {id:item.id, properties:{}}
+                this.referenceColumns.forEach(referenceColumn=>{
+                    if(item.properties[referenceColumn] && item.properties[referenceColumn].relation && item.properties[referenceColumn].relation.length > 0){
+                        prop = {
+                            ...prop,
+                            properties: {
+                                ...prop.properties, [referenceColumn]: {
+                                    relation:[{id:this.pageLookup[item.properties[referenceColumn].relation[0].id]}]
+                                }
+                            } 
+                        }
+                    }
+                })
+                return prop;
+            });
+            allResults = [...allResults, ...fixedRelations]
+            hasMore = response.has_more
+            nextCursor = response.next_cursor
+
+            console.log(`   Carregadas ${allResults.length} páginas...`)
+        }
+        let properties = {}
+        this.referenceColumns.forEach(column=> {
+            properties = {...properties, [column]:{ relation: { data_source_id: targetDbId, single_property:{} } } }
+        });
+
+        await notion.dataSources.update({
+            data_source_id: targetDbId,
+            properties: properties
+        });
+
+        let relation = 0;
+        await Promise.all(allResults.map(async item=>{
+            if(item.properties){
+                const pageUpdate = {
+                    page_id:item.id,
+                    properties: item.properties
+                };
+                await notion.pages.update(pageUpdate);
+                relation++;
+            }
+        }))
+        console.log(`✅ Total de relações atualizadas: ${relation}`)
+    }
+    
     // Cria uma nova página no database de destino
     async createPage(targetDbId, properties, icon, cover, content, originalContent) {
 
@@ -578,6 +647,7 @@ class NotionMigrator {
 
         try {
             const response = await notion.pages.create(req);
+            this.pageLookup = {...this.pageLookup,[originalContent.id]: response.id};
             return response
         } catch (error) {
             console.error('❌ Erro ao criar página:', error.message)
@@ -634,12 +704,15 @@ class NotionMigrator {
                 for (const page of batch) {
                     // try {
 
-                        const mappedProperties = this.mapPropertyValues(page, page.properties)
+                        const mappedProperties = this.mapPropertyValues(page, page.properties, sourceDbId)
                     
                         let newProperties = {}
                         Object.keys(mappedProperties).forEach( propName => {
                             if(!targetSchema?.properties || !targetSchema?.properties[propName]){
                                 const {property, name} = this.mapPropertyStructure(sourceDatabase.properties[propName], propName, targetSchema);
+                                if(property.type == "relation" && property.relation.data_source_id == sourceDbId){
+                                    this.referenceColumns.push(name);
+                                }
                                 newProperties[name] = property
                             }
                         })
@@ -666,7 +739,8 @@ class NotionMigrator {
                     // }
                 }
             }
-            
+            this.fixRelations(targetDbId);
+
             console.log('─'.repeat(50))
             console.log('✅ Migração concluída!')
             console.log(`   Páginas migradas com sucesso: ${successCount}`)
