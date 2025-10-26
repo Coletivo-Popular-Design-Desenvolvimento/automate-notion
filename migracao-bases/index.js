@@ -13,6 +13,8 @@ class NotionMigrator {
         this.sourceDbId = null
         this.targetDbId = null
         this.pageLookup = {}
+        this.parentLookUp = {}
+        this.subItemLookUp = {}
         this.referenceColumns = []
     }
 
@@ -157,7 +159,7 @@ class NotionMigrator {
     }
 
     // Busca todas as páginas do database de origem
-    async getSourceData(databaseId, filters=[]) {
+    async getSourceData(databaseId, filters=[], includeDebugItems=false) {
         console.log(`📥 Buscando dados do database origem: ${databaseId}`)
         
         let allResults = []
@@ -165,7 +167,7 @@ class NotionMigrator {
         let nextCursor = undefined
 
         while (hasMore) {
-            const query = {
+            let query = {
                 data_source_id: databaseId,
                 start_cursor: nextCursor,
                 page_size: 100, 
@@ -176,6 +178,27 @@ class NotionMigrator {
                     }))
                 } : undefined
             };
+            if(includeDebugItems){
+                query = {...query, filter: {...query.filter, and: [...query.filter.and,
+                    {
+                        or: [ 
+                            {
+                                property: "Nome",
+                                "rich_text": {
+                                    "contains": "[Dados] Tradução das demandas."
+                                }
+                            },
+                            {
+                                property: "Nome",
+                                "rich_text": {
+                                    "contains": "Criar script para Popular o banco de dados."
+                                }
+                            }
+                        ]
+                    }
+                ]}}; 
+
+            }
 
             const response = await notion.dataSources.query(query);
 
@@ -512,9 +535,24 @@ class NotionMigrator {
 
             case 'relation':
                 if (sourceProp.relation && sourceProp.relation.length > 0) {
-                    outputValue = {
-                        relation: sourceProp.relation
+                    const isSelfReference = propName.indexOf("Parent-item") >= 0 || propName.indexOf("Sub-item") >=0;
+                    if(isSelfReference && propName === "Parent-item")
+                    {
+                        this.parentLookUp = {...this.parentLookUp, [sourcePage.id]:{
+                            relation: sourceProp.relation.map(item=> {
+                                return {id:item.id}
+                            })}};
+
+                    }else if(isSelfReference && propName === "Sub-item")
+                    {
+                        this.subItemLookUp = {...this.subItemLookUp, [sourcePage.id]:{
+                            relation: sourceProp.relation.map(item=> {
+                                return {id:item.id}
+                            })}};
+                    } else if( !isSelfReference ) {
+                        outputValue = { relation: sourceProp.relation }
                     }
+                    //Ignore automatic self references.
                 }
                 break
 
@@ -548,7 +586,7 @@ class NotionMigrator {
 
         Object.keys(sourceSchema).forEach(propName => {
             const {propertyName, propertyValue} = this.mapPropertyValue(sourceSchema, sourcePage, propName);
-            if(propertyValue){
+            if(propertyValue && propertyValue != null){
                 mappedProperties[propertyName] = propertyValue;
             }
         })
@@ -558,69 +596,66 @@ class NotionMigrator {
 
 
     // Cria uma nova página no database de destino
-    async fixRelations(targetDbId, targetDataSource) {
-        console.log(`📥 Buscando dados do database origem: ${targetDbId}`)
-        
-        let allResults = []
-        let hasMore = true
-        let nextCursor = undefined
+    async fixRelations(targetDbId) {
 
-        while (hasMore) {
-            const query = {
-                data_source_id: targetDbId,
-                start_cursor: nextCursor,
-                page_size: 100, 
-            };
-
-            const response = await notion.dataSources.query(query);
-
-            const fixedRelations = response.results.filter(item=> {
-                const keys = Object.keys(item.properties);
-                return keys.find(key=>this.referenceColumns.indexOf(key) >= 0) != null;
-            }).map(item=> {
-                let prop = {id:item.id, properties:{}}
-                this.referenceColumns.forEach(referenceColumn=>{
-                    if(item.properties[referenceColumn] && item.properties[referenceColumn].relation && item.properties[referenceColumn].relation.length > 0){
-                        prop = {
-                            ...prop,
-                            properties: {
-                                ...prop.properties, [referenceColumn]: {
-                                    relation:[{id:this.pageLookup[item.properties[referenceColumn].relation[0].id]}]
-                                }
-                            } 
+        const structure = {
+            data_source_id: targetDbId,
+            properties:{
+                "Parent-item": {
+                    relation: {
+                        data_source_id: targetDbId,
+                        dual_property:{
+                            "synced_property_name": "Sub-item"
                         }
                     }
-                })
-                return prop;
-            });
-            allResults = [...allResults, ...fixedRelations]
-            hasMore = response.has_more
-            nextCursor = response.next_cursor
-
-            console.log(`   Carregadas ${allResults.length} páginas...`)
-        }
-        let properties = {}
-        this.referenceColumns.forEach(column=> {
-            properties = {...properties, [column]:{ relation: { data_source_id: targetDbId, single_property:{} } } }
-        });
-
-        await notion.dataSources.update({
-            data_source_id: targetDbId,
-            properties: properties
-        });
-
-        let relation = 0;
-        await Promise.all(allResults.map(async item=>{
-            if(item.properties){
-                const pageUpdate = {
-                    page_id:item.id,
-                    properties: item.properties
-                };
-                await notion.pages.update(pageUpdate);
-                relation++;
+                },
+                "Sub-item": {
+                    relation: {
+                        data_source_id: targetDbId,
+                        single_property:{}
+                    }
+                }
             }
-        }))
-        console.log(`✅ Total de relações atualizadas: ${relation}`)
+        }
+        await notion.dataSources.update(structure);
+
+
+        const parentKeys = Object.keys(this.parentLookUp);
+        await Promise.all(parentKeys.map(async key => {
+            const destinationId = this.pageLookup[key];
+            const pageUpdate = {
+                page_id:destinationId,
+                properties: {
+                    "Parent-item": {
+                        relation: this.parentLookUp[key].relation.map(item=>{
+                            return {
+                                id: this.pageLookup[item.id]
+                            };
+                        }).filter(item=>item.id && item.id != null)
+                    }
+                }
+            };
+            await notion.pages.update(pageUpdate);
+        }));
+
+        const subKeys = Object.keys(this.subItemLookUp);
+        await Promise.all(subKeys.map(async key => {
+            const destinationId = this.pageLookup[key];
+            const pageUpdate = {
+                page_id:destinationId,
+                properties: {
+                    "Sub-item": {
+                        relation: this.subItemLookUp[key].relation.map(item=>{
+                            return {
+                                id: this.pageLookup[item.id]
+                            };
+                        }).filter(item=>item.id && item.id != null)
+                    }
+                }
+            };
+            await notion.pages.update(pageUpdate);
+        }));
+
     }
     
     // Cria uma nova página no database de destino
@@ -675,11 +710,12 @@ class NotionMigrator {
                 propertyValue: options.filters[0]
             }])
 
-            
+
             const filters = this.mapDefaultFilters(project, options);
 
+
             // 1. Buscar dados da origem
-            const sourceData = await this.getSourceData(sourceDbId, filters)
+            const sourceData = await this.getSourceData(sourceDbId, filters, false)
 
             // 1. Obter a estrutura da base de dados de origem
             const sourceDatabase = await notion.dataSources.retrieve({
@@ -710,9 +746,6 @@ class NotionMigrator {
                         Object.keys(mappedProperties).forEach( propName => {
                             if(!targetSchema?.properties || !targetSchema?.properties[propName]){
                                 const {property, name} = this.mapPropertyStructure(sourceDatabase.properties[propName], propName, targetSchema);
-                                if(property.type == "relation" && property.relation.data_source_id == sourceDbId){
-                                    this.referenceColumns.push(name);
-                                }
                                 newProperties[name] = property
                             }
                         })
@@ -739,7 +772,8 @@ class NotionMigrator {
                     // }
                 }
             }
-            this.fixRelations(targetDbId);
+
+            await this.fixRelations(targetDbId);
 
             console.log('─'.repeat(50))
             console.log('✅ Migração concluída!')
@@ -792,7 +826,7 @@ export default NotionMigrator
 if(process.argv.length >= 5) {
     main(process.argv[2], process.argv[3], process.argv[4], process.argv[5]!=="false", process.argv.slice(6))
 } else {
-    console.log("Utilização: \nnode start source_database_id destination_page_id destination_database_name [true|false(default)]\n - Simulação [true - Default, false - execução]), propertyName=propertyValue... filtros para a pesquisa de dados");
+    console.log("Utilização: \nnode start source_database_id destination_page_id destination_database_name [true(default)|false]\n - Simulação [true - Default, false - execução]), propertyName=propertyValue... filtros para a pesquisa de dados");
 }
 
 
