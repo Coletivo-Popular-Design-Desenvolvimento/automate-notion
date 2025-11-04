@@ -2,6 +2,7 @@ import { Client } from "@notionhq/client"
 import { config } from "dotenv"
 import fetch from 'node-fetch';
 import fs from 'fs';
+import { type } from "os";
 
 
 config()
@@ -145,6 +146,22 @@ class NotionMigrator {
                         })]
                     }
                 }
+        } else if(child.type === "link_preview"){
+            const url = child.link_preview.url;
+            result = {
+                type:"paragraph",
+                paragraph: {
+                    rich_text: [{
+                        type: 'text',
+                        text: {
+                            content: url,
+                            link: { url: url }
+                        },
+                        plain_text: url,
+                        href: url                
+                    }]
+                }
+            }
         } else {
             result = child;
         }
@@ -676,17 +693,69 @@ class NotionMigrator {
             const newCover = await this.getNewMediaObject(cover, 'page_cover');
             req = {...req, cover: newCover }
         }
-        if(content){
-            req = {...req, children: [...content]}
-        }
 
         try {
             const response = await notion.pages.create(req);
+            if(content){
+                await this.appendChildren(response.id, content);
+            }
+            await this.appendComments(response.id, originalContent.id)
             this.pageLookup = {...this.pageLookup,[originalContent.id]: response.id};
             return response
         } catch (error) {
             console.error('❌ Erro ao criar página:', error.message)
             throw error
+        }
+    }
+
+    async appendComments(pageId, originalId){
+        const comments = await notion.comments.list({
+            block_id: originalId
+        });
+
+        for(var index in comments.results) {
+            const item = comments.results[parseInt(index)];
+            const itemBlock = await this.getChildBlock(item);
+            const{ discussion_id, parent, ...itemCleanup} = itemBlock;
+            const req = {...itemCleanup, parent:{page_id:pageId} }
+            try{
+                await notion.comments.create(req);
+            }catch(error){
+                console.log(error);
+                throw(error);
+            }
+        }
+    }
+
+    async appendChildren(pageId, children){
+        for(var index in children) {
+            const item = children[parseInt(index)];
+            const {children:childrensOfItem, has_children,archived, in_trash, last_edited_by, created_by, ...req} = item;
+            let childrensOfBulletedList = [];
+            if(item.bulleted_list_item && item.has_children){
+                childrensOfBulletedList = [...req.bulleted_list_item.children];
+                req.bulleted_list_item.children = [];
+            }
+            try{
+                
+                const result = await notion.blocks.children.append({
+                    block_id: pageId,
+                    children: [req]
+                });
+
+                if(childrensOfItem && has_children){
+                    await this.appendChildren(result.results[0].id, childrensOfItem);
+                }
+
+                if(item.bulleted_list_item && has_children){
+                    await this.appendChildren(result.results[0].id, childrensOfBulletedList);
+                }
+
+            } catch(error){
+                console.log(error)
+                throw error;
+            }
+
         }
     }
 

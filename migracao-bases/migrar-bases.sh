@@ -42,6 +42,7 @@ node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e9
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Design] Hackathon Soberana" "false" "Hackathon Soberana" "Design"
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Gestão] Hackathon Soberana" "false" "Hackathon Soberana" "Gestão"
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Tech] Hackathon Soberana" "false" "Hackathon Soberana" "Tech"
+node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Comunicação] Hackathon Soberana" "false" "Hackathon Soberana" "Comunicação"
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Design] Feira de quadrinhos - Quadrinhos e afins" "false" "Feira de quadrinhos - Quadrinhos e afins" "Design"
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Gestão] Feira de quadrinhos - Quadrinhos e afins" "false" "Feira de quadrinhos - Quadrinhos e afins" "Gestão"
 node index.js "779e6268-aa20-480b-872e-493a8f235800" "267c5f6d25f8808a8b9cd1c6e958247a" "[Marketing] Feira de quadrinhos - Quadrinhos e afins" "false" "Feira de quadrinhos - Quadrinhos e afins" "Marketing"
